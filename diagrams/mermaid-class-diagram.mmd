@@ -1,0 +1,40 @@
+classDiagram
+    %% Simplified Mermaid class diagram for PawPal+
+
+    class Owner {
+        +String name
+        +List~Pet~ pets
+        +add_pet(pet)
+        +remove_pet(pet_id)
+    }
+
+    class Pet {
+        +String id
+        +String name
+        +String species
+        +int age
+        +List~Task~ tasks
+        +add_task(task)
+        +remove_task(task_id)
+    }
+
+    class Task {
+        +String id
+        +String name
+        +int duration_minutes
+        +String priority
+        +bool recurring
+        +estimate_score()
+    }
+
+    class Schedule {
+        +String date
+        +List~Task~ tasks
+        +add_task(task)
+        +remove_task(task_id)
+        +total_duration()
+    }
+
+    Owner "1" o-- "*" Pet : owns
+    Pet "1" o-- "*" Task : has
+    Schedule "1" o-- "*" Task : includes

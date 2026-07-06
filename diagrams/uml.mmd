@@ -1,15 +1,70 @@
 classDiagram
-    %% Replace the placeholders below with your actual classes, attributes, methods, and relationships.
-    %% Keep this file updated so it matches your final implementation.
+    %% PawPal+ UML class diagram (initial draft)
 
-    class ClassName {
-        +type attribute
-        +method() returnType
+    class Owner {
+        +String name
+        +Preferences preferences
+        +add_pet(pet)
+        +remove_pet(pet_id)
     }
 
-    class AnotherClass {
-        +type attribute
-        +method() returnType
+    class Pet {
+        +String id
+        +String name
+        +String species
+        +int age
+        +List~Task~ tasks
+        +add_task(task)
+        +remove_task(task_id)
     }
 
-    ClassName --> AnotherClass : relationship
+    class Task {
+        +String id
+        +String name
+        +int duration_minutes
+        +String priority  "(low|medium|high)"
+        +bool recurring
+        +TimeWindow preferred_time
+        +estimate_score()
+    }
+
+    class TimeWindow {
+        +time start
+        +time end
+    }
+
+    class Preferences {
+        +List~TimeWindow~ preferred_times
+        +List~TimeWindow~ avoid_times
+        +List~String~ owner_notes
+    }
+
+    class ScheduledItem {
+        +Task task
+        +datetime start
+        +datetime end
+        +String reason
+        +explain()
+    }
+
+    class Schedule {
+        +List~ScheduledItem~ items
+        +add_item(item)
+        +total_duration()
+    }
+
+    class Scheduler {
+        +generate_schedule(owner, pet, date, available_minutes)
+        +score_task(task, preferences)
+        +explain_choice(scheduled_item)
+    }
+
+    %% Relationships
+    Owner "1" o-- "*" Pet : owns
+    Pet "1" o-- "*" Task : has
+    Task "1" --> "1" TimeWindow : preferred
+    Owner "1" --> "1" Preferences : has
+    Schedule "1" o-- "*" ScheduledItem : contains
+    ScheduledItem --> Task : maps_to
+    Scheduler ..> Task : uses
+    Scheduler ..> Preferences : consults
