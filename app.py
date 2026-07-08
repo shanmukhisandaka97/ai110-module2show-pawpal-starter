@@ -52,6 +52,50 @@ owner = st.session_state.owner
 # Keep the owner's name in sync with the text box.
 owner.name = owner_name
 
+# One Scheduler drives all sorting, filtering, and conflict checks below.
+scheduler = Scheduler()
+
+
+def _pet_of(task):
+    """Return the name of the pet that owns ``task``, or None."""
+    for pet in owner.pets:
+        if any(t is task for t in pet.tasks):
+            return pet.name
+    return None
+
+
+def _end_time(task):
+    """Return the "HH:MM" end time of a scheduled task."""
+    total = scheduler.convert_time_to_minutes(task.start_time) + task.duration_minutes
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def show_conflict(task_a, task_b):
+    """Render one conflict as a pet-owner-friendly, actionable warning.
+
+    Instead of a bare "these overlap", it names the pets, shows the exact
+    clock window each task occupies and the overlapping minutes, and suggests
+    a concrete fix — so the owner knows *what* clashes and *how* to resolve it.
+    """
+    start_a = scheduler.convert_time_to_minutes(task_a.start_time)
+    start_b = scheduler.convert_time_to_minutes(task_b.start_time)
+    end_a = start_a + task_a.duration_minutes
+    end_b = start_b + task_b.duration_minutes
+    overlap = min(end_a, end_b) - max(start_a, start_b)
+
+    def label(task):
+        pet = _pet_of(task)
+        who = f" for {pet}" if pet else ""
+        return f"**{task.name}**{who} ({task.start_time}–{_end_time(task)})"
+
+    # Move the shorter task so the fix is the least disruptive.
+    to_move = task_a if task_a.duration_minutes <= task_b.duration_minutes else task_b
+    st.warning(
+        f"⏰ Schedule clash — {label(task_a)} and {label(task_b)} "
+        f"overlap by **{overlap} min**. "
+        f"Try moving **{to_move.name}** to a free slot, or shorten one of them."
+    )
+
 # ---------------------------------------------------------------------------
 # Add a Pet -> handled by Owner.add_pet(Pet(...))
 # ---------------------------------------------------------------------------
@@ -128,21 +172,61 @@ else:
         except ValueError as err:
             st.error(f"Could not add task: {err}")
 
-    # Show all tasks across pets.
+    # Show tasks across pets, sorted and filtered via the Scheduler methods.
     all_tasks = owner.get_all_tasks()
     if all_tasks:
         st.write("**Current tasks:**")
-        st.table(
-            [
-                {
-                    "task": t.name,
-                    "minutes": t.duration_minutes,
-                    "priority": t.priority,
-                    "done": t.is_completed,
-                }
-                for t in all_tasks
-            ]
-        )
+
+        # Filter controls -> Scheduler.filter_by_pet_name / filter_by_completion
+        fcol1, fcol2 = st.columns(2)
+        with fcol1:
+            pet_filter = st.selectbox(
+                "Filter by pet", ["All pets"] + [p.name for p in owner.pets]
+            )
+        with fcol2:
+            status_filter = st.radio(
+                "Status", ["All", "Pending", "Done"], horizontal=True
+            )
+
+        # Start from the selected pet's tasks (or everything).
+        if pet_filter == "All pets":
+            tasks = all_tasks
+        else:
+            tasks = scheduler.filter_by_pet_name(owner, pet_filter)
+
+        # Apply the completion filter.
+        if status_filter == "Pending":
+            tasks = scheduler.filter_by_completion(tasks, completed=False)
+        elif status_filter == "Done":
+            tasks = scheduler.filter_by_completion(tasks, completed=True)
+
+        # Present them in chronological order (unscheduled tasks trail last).
+        tasks = scheduler.sort_by_time(tasks)
+
+        if tasks:
+            st.table(
+                [
+                    {
+                        "task": t.name,
+                        "start": t.start_time or "—",
+                        "minutes": t.duration_minutes,
+                        "priority": t.priority,
+                        "done": "✅" if t.is_completed else "",
+                    }
+                    for t in tasks
+                ]
+            )
+
+            # Flag overlapping start times right here on the task list.
+            conflicts = scheduler.detect_conflicts(tasks)
+            if conflicts:
+                st.write(f"**{len(conflicts)} time conflict(s) found:**")
+                for task_a, task_b in conflicts:
+                    show_conflict(task_a, task_b)
+            else:
+                st.success("✅ No time conflicts among these tasks.")
+        else:
+            st.info("No tasks match the current filters.")
 
 st.divider()
 
@@ -153,24 +237,35 @@ st.subheader("Build Schedule")
 available_minutes = st.slider("Available minutes today", 30, 480, 480, step=15)
 
 if st.button("Generate schedule"):
-    scheduler = Scheduler()
     schedule = scheduler.generate_schedule(owner, available_minutes=available_minutes)
     if schedule.tasks:
-        st.write("**Today's Schedule** (highest value first):")
-        for task in schedule.tasks:
-            st.write(
-                f"- {task.name} — {task.duration_minutes} min "
-                f"({task.priority} priority)"
-            )
-        st.caption(f"Total: {schedule.total_duration()} of {available_minutes} min")
+        used = schedule.total_duration()
+        st.success(
+            f"✅ Planned {len(schedule.tasks)} task(s) — "
+            f"{used} of {available_minutes} min used, {available_minutes - used} min free."
+        )
 
-        # Warn about any tasks whose start times overlap.
+        # Show the plan chronologically so it reads like a real day.
+        st.table(
+            [
+                {
+                    "start": t.start_time or "—",
+                    "task": t.name,
+                    "pet": _pet_of(t) or "—",
+                    "minutes": t.duration_minutes,
+                    "priority": t.priority,
+                }
+                for t in scheduler.sort_by_time(schedule.tasks)
+            ]
+        )
+
+        # Warn about any tasks whose start times overlap, with a helpful fix.
         conflicts = scheduler.detect_conflicts(schedule.tasks)
-        for task_a, task_b in conflicts:
-            st.warning(
-                f"⚠️ Time conflict: '{task_a.name}' ({task_a.start_time}) "
-                f"overlaps '{task_b.name}' ({task_b.start_time})."
-            )
+        if conflicts:
+            for task_a, task_b in conflicts:
+                show_conflict(task_a, task_b)
+        else:
+            st.success("✅ No time conflicts in this plan.")
 
         # Plain-language explanation of what was chosen and what didn't fit.
         report = scheduler.get_scheduling_report(owner, schedule, available_minutes)

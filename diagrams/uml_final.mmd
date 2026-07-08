@@ -1,0 +1,69 @@
+classDiagram
+    %% PawPal+ UML class diagram (final — matches pawpal_system.py)
+
+    class Owner {
+        +String name
+        +List~Pet~ pets
+        +add_pet(pet)
+        +remove_pet(pet_id)
+        +get_pet(pet_id) Pet
+        +get_all_tasks() List~Task~
+    }
+
+    class Pet {
+        +String id
+        +String name
+        +String species
+        +int age
+        +List~Task~ tasks
+        +add_task(task)
+        +remove_task(task_id)
+        +get_incomplete_tasks() List~Task~
+    }
+
+    class Task {
+        +String id
+        +String name
+        +int duration_minutes
+        +String priority
+        +bool recurring
+        +String start_time
+        +date due_date
+        +int interval_days
+        +bool is_completed
+        +estimate_score() int
+        +mark_complete()
+        +__repr__() String
+    }
+
+    class Schedule {
+        +String date
+        +List~Task~ tasks
+        +add_task(task)
+        +remove_task(task_id)
+        +total_duration() int
+    }
+
+    class Scheduler {
+        +rank_tasks_by_score(tasks) List~Task~
+        +sort_by_time(tasks) List~Task~
+        +filter_by_completion(tasks, completed) List~Task~
+        +filter_by_pet_name(owner, pet_name) List~Task~
+        +get_pet_schedule(owner, pet_name) List~Task~
+        +convert_time_to_minutes(start_time) int
+        +check_time_overlap(task_a, task_b) bool
+        +detect_conflicts(tasks) List~tuple~
+        +get_next_due_date(task) date
+        +mark_task_complete(task)
+        +fit_tasks_in_time(sorted_tasks, minutes) List~Task~
+        +generate_schedule(owner, available_minutes, pet_id) Schedule
+        +get_scheduling_report(owner, schedule, minutes) String
+    }
+
+    %% Relationships
+    Owner "1" o-- "*" Pet : owns
+    Pet "1" o-- "*" Task : has
+    Schedule "1" o-- "*" Task : includes
+    Scheduler ..> Owner : reads tasks from
+    Scheduler ..> Task : ranks / filters
+    Scheduler ..> Schedule : produces
