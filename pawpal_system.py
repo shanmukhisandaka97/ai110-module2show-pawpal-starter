@@ -10,10 +10,36 @@ Run this module directly to execute a set of usage examples:
     python pawpal_system.py
 """
 
+from datetime import date, timedelta
 from typing import List, Optional, Dict
 
 # Allowed priority values and the score weight each contributes.
 VALID_PRIORITIES: Dict[str, int] = {"low": 1, "medium": 2, "high": 3}
+
+
+def _validate_time(start_time: Optional[str]) -> Optional[str]:
+    """Validate an "HH:MM" 24-hour time string.
+
+    Args:
+        start_time: A string like ``"09:30"``, or ``None`` for "unscheduled".
+
+    Returns:
+        The same string if valid, or ``None`` if ``None`` was passed.
+
+    Raises:
+        ValueError: If the string is not a well-formed 24-hour "HH:MM" time.
+    """
+    if start_time is None:
+        return None
+    parts = start_time.split(":")
+    # Require zero-padded two-digit parts: string sorting in sort_by_time only
+    # works chronologically when every time is fixed-width (e.g. "09:30").
+    if len(parts) != 2 or not all(len(p) == 2 and p.isdigit() for p in parts):
+        raise ValueError(f"start_time must be zero-padded 'HH:MM', got {start_time!r}")
+    hours, minutes = int(parts[0]), int(parts[1])
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+        raise ValueError(f"start_time out of range (00:00-23:59), got {start_time!r}")
+    return start_time
 
 
 class Owner:
@@ -128,6 +154,9 @@ class Task:
         duration_minutes: int,
         priority: str = "medium",
         recurring: bool = False,
+        start_time: Optional[str] = None,
+        due_date: Optional[date] = None,
+        interval_days: int = 1,
     ) -> None:
         """Create a task.
 
@@ -137,9 +166,17 @@ class Task:
             duration_minutes: How long the task takes. Must be ``> 0``.
             priority: One of ``"low"``, ``"medium"``, or ``"high"``.
             recurring: Whether the task repeats regularly.
+            start_time: Optional 24-hour "HH:MM" start time (e.g. ``"09:30"``).
+                ``None`` means the task has no fixed time yet.
+            due_date: Optional calendar date the task is next due.
+            interval_days: For recurring tasks, how many days between
+                occurrences. Must be ``> 0``. Ignored when ``recurring`` is
+                ``False``.
 
         Raises:
-            ValueError: If ``priority`` is invalid or ``duration_minutes`` <= 0.
+            ValueError: If ``priority`` is invalid, ``duration_minutes`` <= 0,
+                ``start_time`` is not a valid "HH:MM" time, or
+                ``interval_days`` <= 0.
         """
         if priority not in VALID_PRIORITIES:
             raise ValueError(
@@ -149,11 +186,16 @@ class Task:
             raise ValueError(
                 f"duration_minutes must be > 0, got {duration_minutes}"
             )
+        if interval_days <= 0:
+            raise ValueError(f"interval_days must be > 0, got {interval_days}")
         self.id: str = task_id
         self.name: str = name
         self.duration_minutes: int = duration_minutes
         self.priority: str = priority
         self.recurring: bool = recurring
+        self.start_time: Optional[str] = _validate_time(start_time)
+        self.due_date: Optional[date] = due_date
+        self.interval_days: int = interval_days
         self.is_completed: bool = False
 
     def estimate_score(self) -> int:
@@ -230,6 +272,178 @@ class Scheduler:
             A new list sorted by :meth:`Task.estimate_score` descending.
         """
         return sorted(tasks, key=lambda task: task.estimate_score(), reverse=True)
+
+    def sort_by_time(self, tasks: List["Task"]) -> List["Task"]:
+        """Return tasks sorted by start time, earliest first.
+
+        Tasks with no ``start_time`` (``None``) are placed at the end, so a
+        chronological view still shows every task. Because "HH:MM" is
+        zero-padded and fixed-width, plain string comparison already sorts
+        chronologically ("09:30" < "10:00"), so no time parsing is needed.
+
+        Args:
+            tasks: The tasks to sort.
+
+        Returns:
+            A new list ordered by ``start_time`` ascending, unscheduled last.
+        """
+        # The key is a tuple: (is_unscheduled, time). ``False`` (0) sorts before
+        # ``True`` (1), so scheduled tasks come first; among scheduled tasks the
+        # second element orders them by clock time.
+        return sorted(
+            tasks,
+            key=lambda task: (task.start_time is None, task.start_time or ""),
+        )
+
+    def filter_by_completion(
+        self, tasks: List["Task"], completed: bool
+    ) -> List["Task"]:
+        """Return only the tasks whose completion state matches ``completed``.
+
+        Args:
+            tasks: The tasks to filter.
+            completed: ``True`` to keep finished tasks, ``False`` for pending.
+
+        Returns:
+            A new list of the matching tasks, original order preserved.
+        """
+        return [task for task in tasks if task.is_completed == completed]
+
+    def filter_by_pet_name(self, owner: "Owner", pet_name: str) -> List["Task"]:
+        """Return every task belonging to pets whose name matches ``pet_name``.
+
+        Matching is case-insensitive. If no pet matches, an empty list is
+        returned (rather than raising), so callers can safely chain filters.
+
+        Args:
+            owner: The owner whose pets are searched.
+            pet_name: The pet name to match (case-insensitive).
+
+        Returns:
+            A flat list of that pet's tasks. Returns tasks (not the Pet) so the
+            result plugs straight into the other filter/sort methods.
+        """
+        target = pet_name.lower()
+        return [
+            task
+            for pet in owner.pets
+            if pet.name.lower() == target
+            for task in pet.tasks
+        ]
+
+    def get_pet_schedule(self, owner: "Owner", pet_name: str) -> List["Task"]:
+        """Return one pet's incomplete tasks, ordered by start time.
+
+        A convenience that composes the filter/sort primitives: it selects the
+        named pet's tasks, drops completed ones, and sorts chronologically
+        (unscheduled tasks last).
+
+        Args:
+            owner: The owner whose pet is looked up.
+            pet_name: The pet name to match (case-insensitive).
+
+        Returns:
+            The pet's pending tasks in clock order. Empty if the pet is unknown
+            or has no pending tasks.
+        """
+        pet_tasks = self.filter_by_pet_name(owner, pet_name)
+        pending = self.filter_by_completion(pet_tasks, completed=False)
+        return self.sort_by_time(pending)
+
+    def convert_time_to_minutes(self, start_time: Optional[str]) -> Optional[int]:
+        """Convert an "HH:MM" string to minutes since midnight.
+
+        Args:
+            start_time: A zero-padded "HH:MM" time, or ``None``.
+
+        Returns:
+            Minutes since 00:00 (e.g. ``"09:30"`` -> ``570``), or ``None`` if
+            ``start_time`` is ``None``.
+        """
+        if start_time is None:
+            return None
+        hours, minutes = start_time.split(":")
+        return int(hours) * 60 + int(minutes)
+
+    def check_time_overlap(self, task_a: "Task", task_b: "Task") -> bool:
+        """Return whether two tasks occupy overlapping time spans.
+
+        Each task spans ``[start, start + duration_minutes)``. Tasks that only
+        touch at an endpoint (one ends exactly when the other starts) do NOT
+        overlap. A task with no ``start_time`` never conflicts (its time is
+        unknown), so this returns ``False`` if either task is unscheduled.
+
+        Args:
+            task_a: The first task.
+            task_b: The second task.
+
+        Returns:
+            ``True`` if the two time spans overlap, else ``False``.
+        """
+        start_a = self.convert_time_to_minutes(task_a.start_time)
+        start_b = self.convert_time_to_minutes(task_b.start_time)
+        if start_a is None or start_b is None:
+            return False
+        end_a = start_a + task_a.duration_minutes
+        end_b = start_b + task_b.duration_minutes
+        # Half-open overlap: strict '<' so adjacent spans (end == start) are fine.
+        return start_a < end_b and start_b < end_a
+
+    def detect_conflicts(
+        self, tasks: List["Task"]
+    ) -> List[tuple]:
+        """Find all pairs of tasks whose scheduled times overlap.
+
+        Compares every unique pair once. Tasks without a ``start_time`` are
+        ignored (see :meth:`tasks_overlap`).
+
+        Args:
+            tasks: The tasks to check for time conflicts.
+
+        Returns:
+            A list of ``(task_a, task_b)`` tuples, one per overlapping pair.
+            Empty if there are no conflicts.
+        """
+        conflicts: List[tuple] = []
+        for i in range(len(tasks)):
+            for j in range(i + 1, len(tasks)):
+                if self.check_time_overlap(tasks[i], tasks[j]):
+                    conflicts.append((tasks[i], tasks[j]))
+        return conflicts
+
+    def get_next_due_date(self, task: "Task") -> Optional[date]:
+        """Return the date a recurring task is next due after its current one.
+
+        Uses :class:`datetime.timedelta` to add the task's ``interval_days`` to
+        its current ``due_date``. Date arithmetic (leap years, month lengths)
+        is handled by the standard library, so we never do it by hand.
+
+        Args:
+            task: The task to advance.
+
+        Returns:
+            ``due_date + interval_days`` as a :class:`datetime.date`, or
+            ``None`` if the task is not recurring or has no ``due_date``.
+        """
+        if not task.recurring or task.due_date is None:
+            return None
+        return task.due_date + timedelta(days=task.interval_days)
+
+    def mark_task_complete(self, task: "Task") -> None:
+        """Mark a task done, rolling recurring tasks to their next occurrence.
+
+        For a one-off task this just sets ``is_completed``. For a recurring task
+        with a ``due_date``, the current occurrence is "finished" by advancing
+        ``due_date`` to :meth:`get_next_due_date` and clearing the completed
+        flag, so the task reappears on its next scheduled day.
+
+        Args:
+            task: The task to complete.
+        """
+        task.mark_complete()
+        if task.recurring and task.due_date is not None:
+            task.due_date = self.get_next_due_date(task)
+            task.is_completed = False  # reopened for its next occurrence
 
     def fit_tasks_in_time(
         self, sorted_tasks: List["Task"], minutes: int
