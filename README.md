@@ -65,14 +65,35 @@ Today's Schedule for Priya
 # Run the full test suite:
 pytest
 
+# Run a single test file:
+pytest tests/test_pawpal.py -q
+
 # Run with coverage:
 pytest --cov
 ```
 
+The suite lives in `tests/` and covers the core scheduling behaviors:
+
+| File | What it covers |
+|------|----------------|
+| `test_pawpal.py` | Validation, Owner/Pet/Task behavior, scheduling, and the key rubric behaviors: chronological sorting, recurrence roll-forward, and conflict detection |
+| `test_sort_filter.py` | `sort_by_time`, `filter_by_completion`, `filter_by_pet_name`, and `start_time` validation |
+| `test_conflicts_recurring.py` | Time-overlap and conflict detection, `get_pet_schedule`, and recurring-task due-date logic |
+| `test_scheduler_plan.py` | Schedule generation and time-budget planning |
+
+Three behaviors are exercised end to end:
+
+- **Sorting correctness** — tasks are returned in chronological order, with unscheduled (no `start_time`) tasks trailing last.
+- **Recurrence logic** — completing a daily task advances its `due_date` by `interval_days` and reopens it for the next day.
+- **Conflict detection** — the scheduler flags tasks whose time spans overlap (including duplicate start times).
+
 Sample test output:
 
 ```
-# Paste your pytest output here
+$ pytest -q
+........................................................................ [ 61%]
+.............................................                            [100%]
+117 passed in 0.05s
 ```
 
 ## 📐 Smarter Scheduling

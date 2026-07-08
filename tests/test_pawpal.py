@@ -1,5 +1,7 @@
 """Tests for the PawPal+ system."""
 
+from datetime import date
+
 import pytest
 
 from pawpal_system import Owner, Pet, Task, Schedule, Scheduler
@@ -189,6 +191,78 @@ class TestScheduler:
         report = scheduler.get_scheduling_report(owner_with_pets, schedule, minutes=45)
         assert "Priya" in report
         assert "Did not fit" in report
+
+
+# --- Rubric behaviors: sorting, recurrence, conflicts ----------------------
+
+class TestSortingCorrectness:
+    """Sorting Correctness: tasks are returned in chronological order."""
+
+    def test_returns_tasks_in_chronological_order(self):
+        scheduler = Scheduler()
+        tasks = [
+            Task("c", "Evening", 10, start_time="18:00"),
+            Task("a", "Morning", 10, start_time="08:00"),
+            Task("b", "Midday", 10, start_time="12:15"),
+        ]
+        ordered = scheduler.sort_by_time(tasks)
+        assert [t.id for t in ordered] == ["a", "b", "c"]
+
+    def test_unscheduled_tasks_sort_last(self):
+        scheduler = Scheduler()
+        tasks = [
+            Task("late", "Late", 10, start_time="22:00"),
+            Task("none", "Anytime", 10),          # no start_time -> trails
+            Task("early", "Early", 10, start_time="06:00"),
+        ]
+        ordered = scheduler.sort_by_time(tasks)
+        assert [t.id for t in ordered] == ["early", "late", "none"]
+
+
+class TestRecurrenceLogic:
+    """Recurrence Logic: completing a daily task rolls it to the next day.
+
+    NOTE: the implementation does NOT create a *new* Task object. Instead
+    ``mark_task_complete`` advances the same task's ``due_date`` by
+    ``interval_days`` and reopens it (``is_completed`` back to False), so the
+    task reappears on the following day. These tests assert that behavior.
+    """
+
+    def test_completing_daily_task_advances_to_next_day(self):
+        scheduler = Scheduler()
+        task = Task("feed", "Feed", 10, recurring=True,
+                    due_date=date(2026, 7, 7), interval_days=1)
+        scheduler.mark_task_complete(task)
+        assert task.due_date == date(2026, 7, 8)   # rolled to the following day
+        assert task.is_completed is False          # reopened for next occurrence
+
+    def test_daily_task_reopens_rather_than_staying_done(self):
+        scheduler = Scheduler()
+        pet = Pet("dog1", "Rex", "dog", age=4)
+        task = Task("walk", "Daily walk", 30, recurring=True,
+                    due_date=date(2026, 7, 7), interval_days=1)
+        pet.add_task(task)
+        scheduler.mark_task_complete(task)
+        # Still tracked as an incomplete task for the next day (not a new object).
+        assert task in pet.get_incomplete_tasks()
+
+
+class TestConflictDetection:
+    """Conflict Detection: the Scheduler flags tasks at duplicate times."""
+
+    def test_flags_two_tasks_at_the_same_time(self):
+        scheduler = Scheduler()
+        a = Task("a", "Walk", 30, start_time="09:00")
+        b = Task("b", "Feed", 30, start_time="09:00")
+        conflicts = scheduler.detect_conflicts([a, b])
+        assert len(conflicts) == 1
+        assert {conflicts[0][0].id, conflicts[0][1].id} == {"a", "b"}
+
+    def test_no_conflict_when_times_differ(self):
+        scheduler = Scheduler()
+        a = Task("a", "Walk", 30, start_time="09:00")   # 09:00-09:30
+        b = Task("b", "Feed", 30, start_time="09:30")   # starts as A ends
+        assert scheduler.detect_conflicts([a, b]) == []
 
 
 # --- Schedule --------------------------------------------------------------
